@@ -1,0 +1,33 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Dev Day 2018 demo app - Adapted from Cloud-Engineering's Cimpress Security VPC Flow Logs Subscription
+Parameters:
+  name:
+    Description: The baseline name for this stack, used as prefix/name-field for many resources.
+    Type: String
+  DeliverLogsPermissionArn:
+    Description: IAM role ARN for publishing flow logs to CloudWatch
+    Type: String
+    Default: arn:aws:iam::412604355545:role/vpc-flow-log-role
+Resources:
+  VPCFlowLogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::Join:
+          - '-'
+          - - 'vpc-flow-log'
+            - !Ref 'name'
+      RetentionInDays: 60
+  VPCFlowLog:
+    Type: AWS::EC2::FlowLog
+    DependsOn: [VPCFlowLogGroup]
+    Properties:
+      DeliverLogsPermissionArn:
+        Ref: DeliverLogsPermissionArn
+      LogGroupName:
+        Ref: VPCFlowLogGroup
+      ResourceId:
+        Fn::ImportValue:
+          !Sub "${name}-baseline-vpc:VPCId"
+      ResourceType: VPC
+      TrafficType: ALL

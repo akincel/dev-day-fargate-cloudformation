@@ -1,0 +1,14 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Dev Day 2018 demo app - Docker Repository for AWS ECR
+Parameters:
+  name:
+    Description: The baseline name for this stack, used as prefix/name-field for many resources.
+    Type: String
+Resources:
+  ecrRepository:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: !Ref name
+      LifecyclePolicy:
+        LifecyclePolicyText: '{"rules":[{"rulePriority":10,"description":"MR Removal","selection":{"tagStatus":"tagged","countType":"sinceImagePushed","countUnit":"days","tagPrefixList":["mr"],"countNumber":30},"action":{"type":"expire"}},{"rulePriority":20,"description":"Old
+          Production Removal","selection":{"tagStatus":"tagged","countType":"imageCountMoreThan","countNumber":100,"tagPrefixList":["v"]},"action":{"type":"expire"}}]}'

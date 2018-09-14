@@ -1,0 +1,276 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Dev Day 2018 demo app - App on Fargate
+Parameters:
+  name:
+    Description: The baseline name for this stack, used as prefix/name-field for many resources.
+    Type: String
+  domain:
+    Description: The domain to be used to generate the route53 entries.
+    Type: String
+  memory:
+    Type: Number
+    Description: The amount of memory in MB.
+    Default: 512
+  cpu:
+    Type: Number
+    Description: The number of vCPU units.
+    Default: 256
+  minimumCount:
+    Type: Number
+    Description: The minimum count of running tasks.
+    Default: 1
+  maximumCount:
+    Type: Number
+    Description: The maximum count of running tasks.
+    Default: 5
+  dockerImageUrl:
+    Type: String
+    Description: The docker image URL.
+  mergeRequestId:
+    Type: String
+    Default: '0'
+    Description: The merge request ID.
+  loadBalancerRulePriority:
+    Type: String
+    Description: The priority of the load balancer rule.
+Conditions:
+  isMergeRequest:
+    Fn::Not:
+    - Fn::Equals:
+      - Ref: mergeRequestId
+      - '0'
+Resources:
+  targetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      HealthyThresholdCount: 2
+      UnhealthyThresholdCount: 2
+      HealthCheckIntervalSeconds: 30
+      HealthCheckTimeoutSeconds: 5
+      HealthCheckPath: "/healthcheck"
+      TargetType: ip
+      TargetGroupAttributes:
+      - Key: deregistration_delay.timeout_seconds
+        Value: 10
+      Name:
+        Fn::If:
+        - isMergeRequest
+        - !Sub "${name}-${mergeRequestId}"
+        - !Sub "${name}-production"
+      Port: 8080
+      Protocol: HTTP
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${name}-baseline-vpc:VPCId"
+  loadBalancerRule:
+    Type: AWS::ElasticLoadBalancingV2::ListenerRule
+    Properties:
+      Actions:
+      - TargetGroupArn: !Ref targetGroup
+        Type: forward
+      Conditions:
+      - Field: host-header
+        Values:
+        - Fn::If:
+          - isMergeRequest
+          - !Sub ${mergeRequestId}.${domain}
+          - !Sub ${domain}
+      Priority:
+        Ref: loadBalancerRulePriority
+      ListenerArn:
+        Fn::ImportValue:
+          !Sub "${name}-baseline-loadbalancer:LoadBalancerListener"
+  route53record:
+    Type: AWS::Route53::RecordSet
+    Properties:
+      HostedZoneId: 
+        Fn::ImportValue:
+          !Sub "${name}-baseline-route53:HostedZone"
+      Name:
+        Fn::If:
+          - isMergeRequest
+          - !Sub ${mergeRequestId}.${domain}
+          - !Sub ${domain}
+      AliasTarget:
+        DNSName:
+          Fn::ImportValue:
+            !Sub "${name}-baseline-loadbalancer:LoadBalancerDNSName"
+        HostedZoneId:
+          Fn::ImportValue:
+            !Sub "${name}-baseline-loadbalancer:LoadBalancerCanonicalHostedZoneID"
+      Type: A
+
+  ecsTaskDefinition:
+    Type: AWS::ECS::TaskDefinition
+    Properties:
+      Family:
+        Fn::If:
+        - "isMergeRequest"
+        - !Sub ${name}-mergerequests
+        - !Sub ${name}-production
+      Memory: !Ref memory
+      Cpu: !Ref cpu
+      NetworkMode: awsvpc
+      RequiresCompatibilities:
+      - FARGATE
+      ExecutionRoleArn: !Sub arn:aws:iam::${AWS::AccountId}:role/ecsTaskExecutionRole
+      TaskRoleArn:
+        Fn::ImportValue:
+          !Sub "${name}-baseline-ecscluster:IamRoleForEcsTasks"
+      ContainerDefinitions:
+      - Essential: true
+        Name: !Ref name
+        Memory: !Ref memory
+        Cpu: !Ref cpu
+        Image: !Ref dockerImageUrl
+        PortMappings:
+        - Protocol: tcp
+          ContainerPort: 8080
+        Environment:
+        - Name: MergeRequestId
+          Value: !Ref mergeRequestId
+        Ulimits:
+        - Name: nofile
+          SoftLimit: '4096'
+          HardLimit: '10240'
+        LogConfiguration:
+          LogDriver: awslogs
+          Options:
+            awslogs-group:
+              Fn::If:
+              - isMergeRequest
+              - !Sub "${name}-MR-${mergeRequestId}-ECS-Logs"
+              - !Sub "${name}-production-ECS-Logs"
+            awslogs-region: eu-central-1
+            awslogs-stream-prefix:
+              Fn::ImportValue:
+                !Sub "${name}-baseline-ecscluster:ClusterName"
+
+  securityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Sub "Access to fargate container for ${name}"
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${name}-baseline-vpc:VPCId"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '8080'
+        ToPort: '8080'
+        SourceSecurityGroupId:
+          Fn::ImportValue:
+            !Sub "${name}-baseline-loadbalancer:LoadBalancerSecurityGroup"
+
+  ecsLogs:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName:
+        Fn::If:
+        - isMergeRequest
+        - !Sub "${name}-MR-${mergeRequestId}-ECS-Logs"
+        - !Sub "${name}-production-ECS-Logs"
+
+  ecsService:
+    Type: AWS::ECS::Service
+    DependsOn:
+    - loadBalancerRule
+    - ecsLogs
+    Properties:
+      ServiceName:
+        Fn::If:
+          - isMergeRequest
+          - !Sub ${name}-MR-${mergeRequestId}
+          - !Sub ${name}
+      Cluster:
+        Fn::ImportValue:
+          !Sub "${name}-baseline-ecscluster:ClusterName"
+      TaskDefinition: !Ref ecsTaskDefinition
+      LaunchType: FARGATE
+      DeploymentConfiguration:
+        MaximumPercent: 200
+        MinimumHealthyPercent: 75
+      DesiredCount: !Ref minimumCount
+      NetworkConfiguration:
+        AwsvpcConfiguration:
+          AssignPublicIp: DISABLED
+          SecurityGroups: [ !Ref securityGroup ]
+          Subnets:
+            - Fn::ImportValue:
+                !Sub "${name}-baseline-vpc:PrivateSubnetOne"
+            - Fn::ImportValue:
+                !Sub "${name}-baseline-vpc:PrivateSubnetTwo"
+      LoadBalancers:
+      - ContainerName: !Ref name
+        ContainerPort: 8080
+        TargetGroupArn: !Ref targetGroup
+
+  autoScalingRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - application-autoscaling.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      Path: "/"
+      Policies:
+      - PolicyName: AutoScalingServiceTasks
+        PolicyDocument:
+          Version: '2012-10-17'
+          Statement:
+          - Effect: Allow
+            Action:
+            - application-autoscaling:*
+            - cloudwatch:DescribeAlarms
+            - cloudwatch:PutMetricAlarm
+            - ecs:DescribeServices
+            - ecs:UpdateService
+            Resource: "*"
+  serviceAutoScalingTarget:
+    Type: AWS::ApplicationAutoScaling::ScalableTarget
+    DependsOn:
+    - autoScalingRole
+    - ecsService
+    Properties:
+      MaxCapacity: !Ref maximumCount
+      MinCapacity: !Ref minimumCount
+      ResourceId:
+        Fn::Join:
+        - "/"
+        - - service
+          - Fn::ImportValue:
+              !Sub "${name}-baseline-ecscluster:ClusterName"
+          - Fn::GetAtt:
+            - ecsService
+            - Name
+      RoleARN:
+        Fn::GetAtt:
+        - autoScalingRole
+        - Arn
+      ScalableDimension: ecs:service:DesiredCount
+      ServiceNamespace: ecs
+  serviceAutoScalingPolicy:
+    Type: AWS::ApplicationAutoScaling::ScalingPolicy
+    DependsOn: serviceAutoScalingTarget
+    Properties:
+      PolicyName: ServiceAutoScalingPolicy
+      PolicyType: TargetTrackingScaling
+      ScalingTargetId: !Ref serviceAutoScalingTarget
+      TargetTrackingScalingPolicyConfiguration:
+        TargetValue: 50
+        ScaleInCooldown: 0
+        ScaleOutCooldown: 0
+        PredefinedMetricSpecification:
+          PredefinedMetricType: ALBRequestCountPerTarget
+          ResourceLabel:
+            Fn::Join:
+            - "/"
+            - - Fn::ImportValue:
+                  !Sub "${name}-baseline-loadbalancer:LoadBalancerFullName"
+              - Fn::GetAtt:
+                - targetGroup
+                - TargetGroupFullName

@@ -1,0 +1,128 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Dev Day 2018 demo app - Application Load Balancer
+Parameters:
+  name:
+    Description: The baseline name for this stack, used as prefix/name-field for many resources.
+    Type: String
+  certificateArn:
+    Description: Certificate ARN
+    Type: String
+    Default: arn:aws:acm:us-east-1:412604355545:certificate/5e8d24a3-0dea-4f2f-b52c-029ca15400e5
+Resources:
+  SecurityGroupToAllowPublicAccessToLoadBalancer:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: !Join [ " ", [!Ref name, "Allows access to load balancer"]]
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${name}-baseline-vpc:VPCId"
+      SecurityGroupIngress:
+      - IpProtocol: tcp
+        FromPort: '443'
+        ToPort: '443'
+        CidrIp: 0.0.0.0/0
+  LoadBalancer:
+    Type: AWS::ElasticLoadBalancingV2::LoadBalancer
+    Properties:
+      Name: !Ref name
+      Scheme: internet-facing
+      LoadBalancerAttributes:
+      - Key: idle_timeout.timeout_seconds
+        Value: '300'
+      Subnets:
+        - Fn::ImportValue:
+            !Sub "${name}-baseline-vpc:PublicSubnetOne"
+        - Fn::ImportValue:
+            !Sub "${name}-baseline-vpc:PublicSubnetTwo"
+      SecurityGroups:
+      - Ref: SecurityGroupToAllowPublicAccessToLoadBalancer
+  Alert:
+    Type: AWS::SNS::Topic
+    DependsOn:
+    - LoadBalancer
+    Properties:
+      Subscription:
+      - Endpoint: mail@example.com
+        Protocol: email
+  AlarmFor5xxFromAlb:
+    Type: AWS::CloudWatch::Alarm
+    DependsOn:
+    - Alert
+    Properties:
+      AlarmActions:
+      - Ref: Alert
+      OKActions:
+      - Ref: Alert
+      AlarmDescription: Used to alert on direct responses from ELB (e.g. 503)
+      AlarmName:
+        !Sub "${name}-High-ApplicationELB-5xxs"
+      ComparisonOperator: GreaterThanThreshold
+      Dimensions:
+      - Name: LoadBalancer
+        Value: !GetAtt LoadBalancer.LoadBalancerFullName
+      MetricName: HTTPCode_ELB_5XX_Count
+      Namespace: AWS/ApplicationELB
+      EvaluationPeriods: '5'
+      Period: '60'
+      Statistic: Average
+      Threshold: '100'
+      TreatMissingData: notBreaching
+  DropAllTargetGroup:
+    Type: AWS::ElasticLoadBalancingV2::TargetGroup
+    Properties:
+      Name:
+        !Sub "${name}-drop-all"
+      Port: 80
+      Protocol: HTTP
+      VpcId:
+        Fn::ImportValue:
+          !Sub "${name}-baseline-vpc:VPCId"
+  Listener:
+    Type: AWS::ElasticLoadBalancingV2::Listener
+    DependsOn:
+    - LoadBalancer
+    - DropAllTargetGroup
+    Properties:
+      DefaultActions:
+      - Type: forward
+        TargetGroupArn:
+          Ref: DropAllTargetGroup
+      LoadBalancerArn: !Ref LoadBalancer
+      Port: '443'
+      Protocol: HTTPS
+      Certificates:
+      - CertificateArn:
+          Fn::ImportValue:
+            !Sub "${name}-baseline-route53:CertificateArn"
+
+Outputs:
+  SecurityGroup:
+    Description: Load balancer's security group
+    Value: !Ref SecurityGroupToAllowPublicAccessToLoadBalancer
+    Export:
+      Name: !Join [ ':', [ !Ref 'AWS::StackName', 'LoadBalancerSecurityGroup' ] ]
+  Listener:
+    Description: Load balancer listener
+    Value: !Ref Listener
+    Export:
+      Name: !Join [ ':', [ !Ref 'AWS::StackName', 'LoadBalancerListener' ] ]
+  Loadbalancer:
+    Description: Loadbalancer
+    Value: !Ref LoadBalancer
+    Export:
+      Name: !Join [ ':', [ !Ref 'AWS::StackName', 'LoadBalancer' ] ]
+  LoadbalancerFullName:
+    Description: LoadbalancerFullName
+    Value: !GetAtt LoadBalancer.LoadBalancerFullName
+    Export:
+      Name: !Join [ ':', [ !Ref 'AWS::StackName', 'LoadBalancerFullName' ] ]
+  LoadbalancerDnsName:
+    Description: Loadbalancer DNS Name
+    Value: !GetAtt LoadBalancer.DNSName
+    Export:
+      Name: !Join [ ':', [ !Ref 'AWS::StackName', 'LoadBalancerDNSName' ] ]
+  LoadbalancerCanonicalHostedZoneID:
+    Description: Loadbalancer CanonicalHostedZoneID
+    Value: !GetAtt LoadBalancer.CanonicalHostedZoneID
+    Export:
+      Name: !Join [ ':', [ !Ref 'AWS::StackName', 'LoadBalancerCanonicalHostedZoneID' ] ]

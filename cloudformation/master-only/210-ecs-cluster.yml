@@ -1,0 +1,38 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: Dev Day 2018 demo app - ECS Cluster for Fargate Tasks
+Parameters:
+  name:
+    Description: The baseline name for this stack, used as prefix/name-field for many resources.
+    Type: String
+Resources:
+  EcsCluster:
+    Type: AWS::ECS::Cluster
+    Properties:
+      ClusterName: !Ref name
+  IamRoleForEcsCluster:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+        - Effect: Allow
+          Principal:
+            Service:
+            - ecs-tasks.amazonaws.com
+          Action:
+          - sts:AssumeRole
+      ManagedPolicyArns:
+      - arn:aws:iam::aws:policy/CloudWatchLogsFullAccess
+      Path: "/"
+
+Outputs:
+  IamRoleForEcsCluster:
+    Description: IAM Role for the ECS Cluster
+    Value: !Ref IamRoleForEcsCluster
+    Export:
+      Name: !Join [ ':', [ !Ref 'AWS::StackName', 'IamRoleForEcsTasks' ] ]
+  Cluster:
+    Description: ECS Cluster
+    Value: !Ref EcsCluster
+    Export:
+      Name: !Join [ ':', [ !Ref 'AWS::StackName', 'ClusterName' ] ]
