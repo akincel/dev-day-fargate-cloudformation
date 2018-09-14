@@ -4,3 +4,6 @@ The repository contains infrastructure files which can be used to bootstrap supp
 The architecture deployed by these templates is following:
 
 ![Architecture diagram](dev_day_fargate_architecture.png)
+
+## Credits
+Some parts were adapted from: https://github.com/nathanpeck/aws-cloudformation-fargate/
